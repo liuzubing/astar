@@ -16,6 +16,14 @@ AstarPlanner::AstarPlanner()
     this->directions[2].y = 0;
     this->directions[3].x = -1;
     this->directions[3].y = 0;
+    this->directions[4].x = -1;
+    this->directions[4].y = -1;
+    this->directions[5].x = 1;
+    this->directions[5].y = -1;
+    this->directions[6].x = -1;
+    this->directions[6].y = 1;
+    this->directions[7].x = 1;
+    this->directions[7].y = 1;
 
     //topic to subscribe
     this->sub_map = this->n.subscribe("/map", 1, &AstarPlanner::callbackMap, this);
@@ -45,7 +53,7 @@ void AstarPlanner::callbackMap(const nav_msgs::OccupancyGrid &map_msg)
     this->map_resolution = map_msg.info.resolution;
     this->map_width = map_msg.info.width;
     this->map_height = map_msg.info.height;
-    //printf("map_width = %d,map_height = %d\n", map_width, map_height);
+
     this->map_flag = true;
     this->plan();
 }
@@ -120,7 +128,7 @@ bool AstarPlanner::isTraversable(const pose_index &p_index)
         p_index.y >= this->map_height ||
         p_index.y < 0)
         return false;
-    return this->grid[p_index.y][p_index.x];
+    return this->grid[p_index.y][p_index.x].is_pass;
 }
 
 /******************initial grid at the begining of every search************/
@@ -135,77 +143,92 @@ void AstarPlanner::initialGrid()
         delete this->grid;
     }
 
-    this->grid = new bool *[this->map_height];
+    this->grid = new search_node *[this->map_height];
     for (int x = 0; x < this->map_height; x++)
-        this->grid[x] = new bool[this->map_width];
+        this->grid[x] = new search_node[this->map_width];
 
     for (int y = 0; y < this->map_height; ++y)
         for (int x = 0; x < this->map_width; ++x)
-            this->grid[y][x] = this->map.data[y * this->map_width + x] ? false : true; //100-false is occupancy，0-true un-occupancy
+        {
+            this->grid[y][x].index.x = x;
+            this->grid[y][x].index.y = y;
+            this->grid[y][x].g = -1;
+            this->grid[y][x].h = -1;
+            this->grid[y][x].g_h = -1;
+            this->grid[y][x].pre_index.x = -1;
+            this->grid[y][x].pre_index.y = -1;
+            this->grid[y][x].is_pass = this->map.data[y * this->map_width + x] ? false : true; //100-false is occupancy，0-true un-occupancy
+        }
 }
 
 /***************** updateGrid******************/
-void AstarPlanner::updateGrid(const pose_index &p_index)
+void AstarPlanner::updateGrid(const search_node &node)
 {
-    this->grid[p_index.y][p_index.x] = false;
+    this->grid[node.index.y][node.index.x] = node;
 }
 
 /************search next node and retrun the node***********/
-search_node AstarPlanner::searchNextNode(const search_node &pre_node) //can't mod param in function
+std::vector<search_node> AstarPlanner::searchNode(const std::vector<search_node> &node_vector)
 {
-    if (isEqual(pre_node.index, this->end_index))
+    std::vector<search_node> multi_temp_node_vector;
+    for (const auto &item : node_vector)
     {
-        printf("astar search is finished !");
-        return pre_node;
+        for (int i = 0; i < 8; i++)
+        {
+            search_node temp_node = item;
+            temp_node.index.x += this->directions[i].x;
+            temp_node.index.y += this->directions[i].y;
+
+            //首先检查temp_node是否能够通行
+            if (!this->isTraversable(temp_node.index))
+                continue;
+
+            if (temp_node.index.x == item.index.x || temp_node.index.y == item.index.y) //如果搜索方向是在竖直方向
+                temp_node.g = item.g + 1.0;
+            else //如果搜索方向是在对角方向
+                temp_node.g = item.g + 1.414;
+
+            int min_d = abs(temp_node.index.x - this->end_index.x) < abs(temp_node.index.y - this->end_index.y) ? abs(temp_node.index.x - this->end_index.x) : abs(temp_node.index.y - this->end_index.y);
+            int max_d = abs(temp_node.index.x - this->end_index.x) > abs(temp_node.index.y - this->end_index.y) ? abs(temp_node.index.x - this->end_index.x) : abs(temp_node.index.y - this->end_index.y);
+            temp_node.h = 1.414 * (double)min_d + fabs(max_d - min_d);
+
+            temp_node.g_h = temp_node.g + temp_node.h;
+            temp_node.pre_index = item.index; //节点的前一个节点索引
+            temp_node.is_pass = false;        //把这个节点设置为不可通过
+
+            multi_temp_node_vector.push_back(temp_node);
+        }
     }
+
     std::vector<search_node> temp_node_vector;
-    search_node temp_node;
+    if (multi_temp_node_vector.size() == 0)
+        return temp_node_vector;
 
-    // for (int i = 0; i < 4; i++)
-    // {
-    //     pose_index temp_index = pre_node.index;
-    //     temp_index.x += this->directions[i].x;
-    //     temp_index.y += this->directions[i].y;
-    //     if (!this->isTraversable(temp_index)) //如果不能通过
-    //         continue;
-
-    //     temp_node.index = temp_index;
-    //     temp_node.g = pre_node.g + 1.0;
-    //     temp_node.h = abs(temp_index.x - end_index.x) + abs(temp_index.y - end_index.y);
-    //     temp_node.g_h = temp_node.g + temp_node.h;
-    //     temp_node_vector.push_back(temp_node);
-    // }
-    for (const auto &item : this->directions)
+    temp_node_vector.push_back(multi_temp_node_vector[0]);
+    for (int i = 0; i < (int)multi_temp_node_vector.size(); i++)
     {
-        pose_index temp_index = pre_node.index;
-        temp_index.x += item.x;
-        temp_index.y += item.y;
-        if (!this->isTraversable(temp_index)) //如果不能通过
-            continue;
-
-        temp_node.index = temp_index;
-        temp_node.g = pre_node.g + 1.0;
-        temp_node.h = abs(temp_index.x - end_index.x) + abs(temp_index.y - end_index.y);
-        temp_node.g_h = temp_node.g + temp_node.h;
-        temp_node_vector.push_back(temp_node);
-    }
-    if (temp_node_vector.size() == 0)
-    {
-        printf("astar search is error !\n");
-        return pre_node;
+        //首先寻找item在temp_node_vector中是否存在,如果不存在,就添加,否则就和原来的item_比较选择代价最低的
+        if (isInVector(multi_temp_node_vector[i], temp_node_vector))
+        {
+            for (auto &item_ : temp_node_vector)
+            {
+                if (isEqual(multi_temp_node_vector[i].index, item_.index)) //如果是同一个网格,就选择代价最低的
+                {
+                    item_ = (multi_temp_node_vector[i].g_h < item_.g_h ? multi_temp_node_vector[i] : item_);
+                }
+            }
+        }
+        else
+            temp_node_vector.push_back(multi_temp_node_vector[i]);
     }
 
-    temp_node = temp_node_vector[0];
-    for (int i = 0; i < (int)temp_node_vector.size(); i++)
-    {
-        if (temp_node.g_h > temp_node_vector[i].g_h)
-            temp_node = temp_node_vector[i];
-    }
+    for (const auto &item : temp_node_vector)
+        this->updateGrid(item); //update Grid
 
-    return temp_node;
+    return temp_node_vector;
 }
 
-void AstarPlanner::vectorToPath()
+void AstarPlanner::getPathFromGrid()
 {
     this->path.poses.clear(); //clear the vector before use
 
@@ -219,36 +242,29 @@ void AstarPlanner::vectorToPath()
     pose_stamped.pose.orientation.y = 0;
     pose_stamped.pose.orientation.z = 0;
     pose_stamped.pose.orientation.w = 1;
-    // for (int i = 0; i < (int)this->path_vector.size(); i++)
-    // {
-    //     pose_stamped.header.stamp = ros::Time::now(); //stamp
-    //     pose_stamped.header.seq = i;                  //seq
-
-    //     pose_stamped.pose.position.x = this->path_vector[i].x * this->map_resolution +
-    //                                    this->map.info.origin.position.x +
-    //                                    this->map_resolution / 2;
-    //     pose_stamped.pose.position.y = this->path_vector[i].y * this->map_resolution +
-    //                                    this->map.info.origin.position.y +
-    //                                    this->map_resolution / 2;
-
-    //     this->path.poses.push_back(pose_stamped);
-    // }
 
     int i = 0;
-    for (const auto &item : this->path_vector)
+    pose_index index_ = this->end_index;
+    while (index_.x != -1 && index_.y != -1)
     {
         pose_stamped.header.stamp = ros::Time::now(); //stamp
         pose_stamped.header.seq = i;                  //seq
         i++;
 
-        pose_stamped.pose.position.x = item.x * this->map_resolution +
+        pose_stamped.pose.position.x = this->grid[index_.y][index_.x].index.x * this->map_resolution +
                                        this->map.info.origin.position.x +
                                        this->map_resolution / 2;
-        pose_stamped.pose.position.y = item.y * this->map_resolution +
+        pose_stamped.pose.position.y = this->grid[index_.y][index_.x].index.y * this->map_resolution +
                                        this->map.info.origin.position.y +
                                        this->map_resolution / 2;
-        this->path.poses.push_back(pose_stamped);
+
+        this->path.poses.push_back(pose_stamped); //得到的path是从end点到start点的顺序,记得将容器逆序
+
+        index_ = this->grid[index_.y][index_.x].pre_index;
     }
+
+    //std::reverse(std::begin(this->path.poses),std::end(this->path.poses));//将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
+    std::reverse(this->path.poses.begin(), this->path.poses.end()); //将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
 }
 
 void AstarPlanner::publishPath()
@@ -263,29 +279,31 @@ void AstarPlanner::publishPath()
 
 void AstarPlanner::astar()
 {
-    this->initialGrid();
-    this->updateGrid(this->start_index); //把起点和终点在grid中进行标记
-    //this->updateGrid(this->end_index);不能标记终点
-
-    this->path_vector.clear(); //clear the vector before use
-    this->path_vector.push_back(this->start_index);
+    this->initialGrid(); //首先对grid初始化
 
     search_node node; //start_search_node
     node.index = this->start_index;
     node.g = 0;
     node.h = abs(start_index.x - end_index.x) + abs(start_index.y - end_index.y);
     node.g_h = node.g + node.h;
+    node.pre_index.x = -1;
+    node.pre_index.y = -1;
+    node.is_pass = false;
 
-    while (!isEqual(node.index, this->end_index))
+    this->updateGrid(node); //把起点和终点在grid中进行标记
+
+    std::vector<search_node> node_vector;
+    node_vector.push_back(node);
+
+    search_node end_node; //end_node用于检测搜索结果中是否含有终点,如果含有就停止搜索,否则继续(避免全部搜索,节省时间)
+    end_node.index = this->end_index;
+
+    while (node_vector.size() != 0)
     {
-        search_node node_temp = this->searchNextNode(node);
-
-        if (isEqual(node, node_temp))
+        std::vector<search_node> temp_vector(searchNode(node_vector)); //计算搜索结果
+        if (isInVector(end_node, temp_vector))                         //如果搜索结果中已经含有end node,则停止搜索
             break;
-
-        node = node_temp;
-        path_vector.push_back(node.index); //node add to path_vector
-        this->updateGrid(node.index);      //update Grid
+        node_vector.assign(temp_vector.begin(), temp_vector.end()); //赋值给node_vector进行循环结构的判断
     }
 }
 
@@ -307,8 +325,16 @@ void AstarPlanner::plan()
         return;
     }
 
+    ros::Time t0 = ros::Time::now();
+
     this->astar();
-    this->vectorToPath();
+
+    ros::Time t1 = ros::Time::now();
+    ros::Duration d(t1 - t0);
+    std::cout << "TIME in ms: " << d * 1000 << std::endl;
+
+    this->getPathFromGrid();
     this->publishPath();
+
     return;
 }
