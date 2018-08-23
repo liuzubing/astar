@@ -3,6 +3,14 @@
 #include <iostream>
 #include <vector>
 
+enum class STATUS : uint8_t//enum class
+{
+  NONE,
+  OPEN,//空白
+  CLOSED,//路径
+  OBS//障碍
+};
+
 struct pose_index
 {
     int x;
@@ -16,7 +24,8 @@ struct search_node
     double h;
     double g_h;
     pose_index pre_index;
-    bool is_pass;
+    //search_node pre_node;
+    STATUS status = STATUS::NONE;
 };
 
 inline static bool isEqual(const pose_index &a, const pose_index &b)

@@ -121,14 +121,18 @@ void AstarPlanner::callbackEnd(const geometry_msgs::PoseStamped &end_msg)
 }
 
 /********************* detect astar search point ************************/
-bool AstarPlanner::isTraversable(const pose_index &p_index)
+STATUS AstarPlanner::isTraversable(const pose_index &p_index)
 {
     if (p_index.x >= this->map_width ||
         p_index.x < 0 ||
         p_index.y >= this->map_height ||
         p_index.y < 0)
-        return false;
-    return this->grid[p_index.y][p_index.x].is_pass;
+        return STATUS::NONE; //在地图之外
+    if (this->grid[p_index.y][p_index.x].status == STATUS::OBS)
+        return STATUS::OBS; //所在位置是障碍物
+    if (this->grid[p_index.y][p_index.x].status == STATUS::CLOSED)
+        return STATUS::CLOSED; //所在位置已经被搜索过了
+    return STATUS::OPEN;
 }
 
 /******************initial grid at the begining of every search************/
@@ -157,7 +161,11 @@ void AstarPlanner::initialGrid()
             this->grid[y][x].g_h = -1;
             this->grid[y][x].pre_index.x = -1;
             this->grid[y][x].pre_index.y = -1;
-            this->grid[y][x].is_pass = this->map.data[y * this->map_width + x] ? false : true; //100-false is occupancy，0-true un-occupancy
+
+            if (this->map.data[y * this->map_width + x])
+                this->grid[y][x].status = STATUS::OBS; //100-false is occupancy，0-true un-occupancy
+            else
+                this->grid[y][x].status = STATUS::OPEN;
         }
 }
 
@@ -167,65 +175,134 @@ void AstarPlanner::updateGrid(const search_node &node)
     this->grid[node.index.y][node.index.x] = node;
 }
 
-/************search next node and retrun the node***********/
-std::vector<search_node> AstarPlanner::searchNode(const std::vector<search_node> &node_vector)
+std::vector<search_node> AstarPlanner::searchNodeVector(const std::vector<search_node> &node_11)
 {
-    std::vector<search_node> multi_temp_node_vector;
-    for (const auto &item : node_vector)
+    std::vector<search_node> node_vector; //存储初次生成得到的node
+    for (const auto &node : node_11)
     {
         for (int i = 0; i < 8; i++)
         {
-            search_node temp_node = item;
-            temp_node.index.x += this->directions[i].x;
-            temp_node.index.y += this->directions[i].y;
+            search_node temp_node;
+            temp_node.index.x = node.index.x + this->directions[i].x;
+            temp_node.index.y = node.index.y + this->directions[i].y;
 
             //首先检查temp_node是否能够通行
-            if (!this->isTraversable(temp_node.index))
+            if (this->isTraversable(temp_node.index) != STATUS::OPEN)
                 continue;
 
-            if (temp_node.index.x == item.index.x || temp_node.index.y == item.index.y) //如果搜索方向是在竖直方向
-                temp_node.g = item.g + 1.0;
+            if (temp_node.index.x == node.index.x || temp_node.index.y == node.index.y) //如果搜索方向是在竖直方向
+                temp_node.g = node.g + 1.0;
             else //如果搜索方向是在对角方向
-                temp_node.g = item.g + 1.414;
+                temp_node.g = node.g + 1.414;
+            //temp_node.g = 0;
 
             int min_d = abs(temp_node.index.x - this->end_index.x) < abs(temp_node.index.y - this->end_index.y) ? abs(temp_node.index.x - this->end_index.x) : abs(temp_node.index.y - this->end_index.y);
             int max_d = abs(temp_node.index.x - this->end_index.x) > abs(temp_node.index.y - this->end_index.y) ? abs(temp_node.index.x - this->end_index.x) : abs(temp_node.index.y - this->end_index.y);
             temp_node.h = 1.414 * (double)min_d + fabs(max_d - min_d);
 
+            // temp_node.h = 0;
             temp_node.g_h = temp_node.g + temp_node.h;
-            temp_node.pre_index = item.index; //节点的前一个节点索引
-            temp_node.is_pass = false;        //把这个节点设置为不可通过
+            temp_node.pre_index = node.index;  //节点的前一个节点索引
+            temp_node.status = STATUS::CLOSED; //把这个节点设置为不可通过
 
-            multi_temp_node_vector.push_back(temp_node);
+            node_vector.push_back(temp_node);
         }
     }
-
-    std::vector<search_node> temp_node_vector;
-    if (multi_temp_node_vector.size() == 0)
-        return temp_node_vector;
-
-    temp_node_vector.push_back(multi_temp_node_vector[0]);
-    for (int i = 0; i < (int)multi_temp_node_vector.size(); i++)
+    return node_vector;
+}
+std::vector<search_node> AstarPlanner::getMinGHNode(std::vector<search_node> node_vector)
+{
+    search_node node = node_vector[0];
+    for (const auto &item : node_vector)
+        node = node.g_h < item.g_h ? node : item;
+    std::vector<search_node> node_vector_;
+    node_vector_.push_back(node);
+    for (const auto &item : node_vector)
     {
-        //首先寻找item在temp_node_vector中是否存在,如果不存在,就添加,否则就和原来的item_比较选择代价最低的
-        if (isInVector(multi_temp_node_vector[i], temp_node_vector))
-        {
-            for (auto &item_ : temp_node_vector)
-            {
-                if (isEqual(multi_temp_node_vector[i].index, item_.index)) //如果是同一个网格,就选择代价最低的
-                {
-                    item_ = (multi_temp_node_vector[i].g_h < item_.g_h ? multi_temp_node_vector[i] : item_);
-                }
-            }
-        }
-        else
-            temp_node_vector.push_back(multi_temp_node_vector[i]);
+        if (isEqual(node.index, item.index))
+            continue;
+        if (node.g_h == item.g_h)
+            node_vector_.push_back(item);
+    }
+    return node_vector_;
+}
+search_node AstarPlanner::reCalGH(const search_node &node)
+{
+    std::vector<search_node> node_vector;
+    for (const auto &item : this->directions)
+    {
+        pose_index a;
+        a.x = node.index.x + item.x;
+        a.y = node.index.y + item.y;
+
+        if (this->isTraversable(a) != STATUS::CLOSED)
+            continue;
+
+        node_vector.push_back(this->grid[a.y][a.x]); //至少可以搜索到1个计算他的一个父节点
+    }
+    //重新计算node处的代价
+    std::vector<search_node> node_vector_;
+    for (const auto &item : node_vector)
+    {
+        search_node node_;
+        node_.index = node.index; //index不会变化
+
+        if (item.index.x == node.index.x || item.index.y == node.index.y) //如果搜索方向是在竖直方向
+            node_.g = item.g + 1.0;
+        else //如果搜索方向是在对角方向
+            node_.g = item.g + 1.414;
+
+        node_.h = node.h; //h值不会变化
+        node_.g_h = node_.g + node_.h;
+
+        node_.pre_index = item.index;
+        node_.status = STATUS::CLOSED;
+
+        node_vector_.push_back(node_);
+    }
+    //选择代价最小的node
+    search_node node_1 = node_vector_[0];
+    for (const auto &item : node_vector_)
+        node_1 = node_1.g_h < item.g_h ? node_1 : item;
+    return node_1;
+}
+
+std::vector<search_node> AstarPlanner::searchNode(const std::vector<search_node> &node_vectors)
+//search_node AstarPlanner::searchNode(search_node &node)
+{
+
+    std::vector<search_node> node_vector = this->searchNodeVector(node_vectors);
+    if (node_vector.size() == 0)
+    {
+        std::vector<search_node> temp_node_vector;
+        for (const auto &item : node_vectors)
+            temp_node_vector.push_back(this->grid[item.pre_index.y][item.pre_index.x]);
+
+        return temp_node_vector; //如果无路可走就返回父节点
+        // return this->grid[node.pre_index.y][node.pre_index.x]; //如果无路可走就返回父节点
     }
 
-    for (const auto &item : temp_node_vector)
-        this->updateGrid(item); //update Grid
+    std::vector<search_node> node_vector_ = this->getMinGHNode(node_vector);
 
-    return temp_node_vector;
+    std::vector<search_node> node_vector_1;
+    for (const auto &item : node_vector_)
+    {
+        search_node node_ = this->reCalGH(item);
+        node_vector_1.push_back(node_);
+    }
+    std::vector<search_node> node_vector_11 = this->getMinGHNode(node_vector_1);
+    for (const auto &item : node_vector_11)
+        this->updateGrid(item);
+    return node_vector_11;
+
+    //选择代价最小的node
+    // search_node node_1 = node_vector_1[0];
+    // for (const auto &item : node_vector_1)
+    //     node_1 = node_1.g_h < item.g_h ? node_1 : item;
+
+    // this->updateGrid(node_1); //更新grid
+
+    // return node_1;
 }
 
 void AstarPlanner::getPathFromGrid()
@@ -264,7 +341,7 @@ void AstarPlanner::getPathFromGrid()
     }
 
     //std::reverse(std::begin(this->path.poses),std::end(this->path.poses));//将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
-    std::reverse(this->path.poses.begin(), this->path.poses.end()); //将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
+    // std::reverse(this->path.poses.begin(), this->path.poses.end()); //将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
 }
 
 void AstarPlanner::publishPath()
@@ -279,6 +356,7 @@ void AstarPlanner::publishPath()
 
 void AstarPlanner::astar()
 {
+
     this->initialGrid(); //首先对grid初始化
 
     search_node node; //start_search_node
@@ -288,23 +366,19 @@ void AstarPlanner::astar()
     node.g_h = node.g + node.h;
     node.pre_index.x = -1;
     node.pre_index.y = -1;
-    node.is_pass = false;
+    node.status = STATUS::CLOSED;
 
     this->updateGrid(node); //把起点和终点在grid中进行标记
 
     std::vector<search_node> node_vector;
     node_vector.push_back(node);
 
-    search_node end_node; //end_node用于检测搜索结果中是否含有终点,如果含有就停止搜索,否则继续(避免全部搜索,节省时间)
-    end_node.index = this->end_index;
-
-    while (node_vector.size() != 0)
+    while (!isEqual(node_vector[0].index, this->end_index)) //搜索点与终点不重合才进行搜索
     {
-        std::vector<search_node> temp_vector(searchNode(node_vector)); //计算搜索结果
-        if (isInVector(end_node, temp_vector))                         //如果搜索结果中已经含有end node,则停止搜索
-            break;
-        node_vector.assign(temp_vector.begin(), temp_vector.end()); //赋值给node_vector进行循环结构的判断
+        std::vector<search_node> node_vector_ = this->searchNode(node_vector);
+        node_vector.assign(node_vector_.begin(), node_vector_.end());
     }
+    //node = this->searchNode(node);
 }
 
 void AstarPlanner::plan()

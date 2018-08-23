@@ -19,8 +19,14 @@ public:
   void callbackEnd(const geometry_msgs::PoseStamped &end_msg);
   void updateGrid(const search_node &node);              //更新网格地图（有新添加进来的）
   void initialGrid();                                      //每次规划初始化网格地图
-  bool isTraversable(const pose_index &p_index);           //当前搜索点是否可以通过
-  std::vector<search_node> searchNode(const std::vector<search_node> &node_vector);
+  STATUS isTraversable(const pose_index &p_index);           //当前搜索点是否可以通过
+  // search_node searchNode(search_node &node);
+  std::vector<search_node> searchNode(const std::vector<search_node> &node_vectors);
+
+  search_node reCalGH(const search_node &node);
+  std::vector<search_node> getMinGHNode(std::vector<search_node> node_vector);
+  // std::vector<search_node> searchNodeVector(const search_node &node);
+  std::vector<search_node> searchNodeVector(const std::vector<search_node> &node_11);
   void getPathFromGrid();
   void publishPath();
   void astar();
