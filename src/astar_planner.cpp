@@ -200,6 +200,9 @@ std::vector<search_node> AstarPlanner::searchNodeVector(const std::vector<search
             int max_d = abs(temp_node.index.x - this->end_index.x) > abs(temp_node.index.y - this->end_index.y) ? abs(temp_node.index.x - this->end_index.x) : abs(temp_node.index.y - this->end_index.y);
             temp_node.h = 1.414 * (double)min_d + fabs(max_d - min_d);
 
+            // double d = abs(temp_node.index.x - this->end_index.x) + abs(temp_node.index.y - this->end_index.y);
+            // temp_node.h = d;
+
             // temp_node.h = 0;
             temp_node.g_h = temp_node.g + temp_node.h;
             temp_node.pre_index = node.index;  //节点的前一个节点索引
@@ -341,7 +344,7 @@ void AstarPlanner::getPathFromGrid()
     }
 
     //std::reverse(std::begin(this->path.poses),std::end(this->path.poses));//将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
-    // std::reverse(this->path.poses.begin(), this->path.poses.end()); //将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
+    std::reverse(this->path.poses.begin(), this->path.poses.end()); //将路径逆序从start开始  //或者在搜索路径的时候从end点往回搜索,就不用逆序了
 }
 
 void AstarPlanner::publishPath()
